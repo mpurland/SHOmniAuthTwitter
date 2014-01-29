@@ -20,9 +20,14 @@
 
 #define NSNullIfNil(v) (v ? v : [NSNull null])
 
-//Why isn't this public from AF... >_>
 
-static NSDictionary * SHParametersFromQueryString(NSString *queryString) {
+@interface SHOmniAuthTwitter ()
++(NSMutableDictionary *)authHashWithResponse:(NSDictionary *)theResponse;
+
+@end
+
+// from AFOAuth1Client
+static NSDictionary * AFParametersFromQueryString(NSString *queryString) {
     NSMutableDictionary *parameters = [NSMutableDictionary dictionary];
     if (queryString) {
         NSScanner *parameterScanner = [[NSScanner alloc] initWithString:queryString];
@@ -39,7 +44,7 @@ static NSDictionary * SHParametersFromQueryString(NSString *queryString) {
             [parameterScanner scanString:@"&" intoString:NULL];
             
             if (name && value) {
-                [parameters setValue:[value stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding] forKey:[name stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding]];
+                parameters[[name stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding]] = [value stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
             }
         }
     }
@@ -48,67 +53,38 @@ static NSDictionary * SHParametersFromQueryString(NSString *queryString) {
 }
 
 
-@interface SHOmniAuthTwitter ()
-+(NSMutableDictionary *)authHashWithResponse:(NSDictionary *)theResponse;
-
-@end
-
-        
 @implementation SHOmniAuthTwitter
 
 +(void)performLoginWithListOfAccounts:(SHOmniAuthAccountsListHandler)accountPickerBlock
                            onComplete:(SHOmniAuthAccountResponseHandler)completionBlock; {
   ACAccountStore * accountStore  =  [[ACAccountStore alloc] init];
   ACAccountType  * accountType   = [accountStore accountTypeWithAccountTypeIdentifier:self.accountTypeIdentifier];
-
-  if([self isLocalTwitterAccountAvailable]) {
   [accountStore requestAccessToAccountsWithType:accountType options:nil completion:^(BOOL granted, NSError *error) {
-          if (granted) {
-              [self performLoginWithAccounts:[accountStore accountsWithAccountType:accountType] pickerBlock:accountPickerBlock completionBlock:completionBlock granted:granted];
-          } else {
-              completionBlock(nil, nil, error, granted);
-          }
-      }];
-  } else {
-      [self performLoginWithAccounts:@[] pickerBlock:accountPickerBlock completionBlock:completionBlock granted:NO];
-  }
-}
-
-+ (void)performLoginWithAccounts:(NSArray *)accounts
-                     pickerBlock:(SHOmniAuthAccountsListHandler)accountPickerBlock
-                 completionBlock:(SHOmniAuthAccountResponseHandler)completionBlock granted:(BOOL)granted {
     dispatch_async(dispatch_get_main_queue(), ^{
-        accountPickerBlock(accounts, ^(id<account> theChosenAccount) {
-            ACAccount * account = (ACAccount *)theChosenAccount;
-            if(account == nil) {
-                [self performLoginForNewAccount:completionBlock granted:granted];
-            } else {
-                [self performReverseAuthForAccount:account withBlock:completionBlock];
-            }
-        });
+      accountPickerBlock([accountStore accountsWithAccountType:accountType], ^(id<account> theChosenAccount) {
+        if (granted
+            // No account, we should attempt to create one with performLoginForNewAccount
+            || ([error.domain isEqualToString:ACErrorDomain] && error.code == 6 && theChosenAccount == nil)
+            // Access not granted, no account, we should attempt to create one (or login otherwise) with performLoginForNewAccount
+            || (!granted && theChosenAccount == nil)) {
+          ACAccount * account = (ACAccount *)theChosenAccount;
+          if(account == nil)[self performLoginForNewAccount:completionBlock granted:granted];
+          else [self performReverseAuthForAccount:account withBlock:completionBlock];
+        }
+        // Access not granted
+        else if (!granted) {
+            NSError *responseError = [NSError errorWithDomain:kOmniAuthTwitterErrorDomainAccessNotGranted code:kOmniAuthTwitterErrorCodeAccessNotGranted userInfo:@{NSLocalizedDescriptionKey : @"To use your Twitter account with this app, open Settings > Twitter and make sure this app is turned on."}];
+            completionBlock(nil, nil, responseError, granted);
+        }
+        // Other error
+        else {
+            completionBlock(nil, nil, error, granted);
+        }
+      });
     });
-}
+  }];
   
-+ (BOOL)isLocalTwitterAccountAvailable
-{
-    BOOL available = NO;
-
-#if TARGET_IPHONE_SIMULATOR
-
-    /**
-     *  NB: There have been many reports of +[SLComposeViewController isAvailableForServiceType] not
-     *  working on the iOS Simulator. To avoid any confusion, we'll use the more reliable method
-     *  from Twitter.framework.
-     */
-    available = [TWTweetComposeViewController canSendTweet];
-
-#else
-
-    if ([SLComposeViewController class]) available = [SLComposeViewController isAvailableForServiceType:SLServiceTypeTwitter];
-
-#endif
-
-    return available;
+  
 }
 
 +(void)performLoginForNewAccount:(SHOmniAuthAccountResponseHandler)completionBlock granted: (BOOL) granted {
@@ -133,21 +109,20 @@ static NSDictionary * SHParametersFromQueryString(NSString *queryString) {
                                                           providerValue:SHOmniAuthProviderValueScope
                                                           forProvider:self.provider]
                                                 success:^(AFOAuth1Token *accessToken, id responseObject) {
-                                                    // Native access was granted, attempt to save account OAuth credentials and reverse auth...
                                                     if (granted) {
-                                                        NSDictionary * response = SHParametersFromQueryString([[NSString alloc] initWithData:responseObject encoding:NSUTF8StringEncoding]);
+                                                        NSString *responseString = [[NSString alloc] initWithData:responseObject encoding:NSUTF8StringEncoding];
+                                                        NSString *screenName = [AFParametersFromQueryString(responseString) valueForKey:@"screen_name"];
                                                         
-                                                        [self saveTwitterAccountWithToken:accessToken.key andSecret:accessToken.secret withScreenName:[NSString stringWithFormat:@"%@%@", @"@", response[@"screen_name"]]
-                                                                    withCompletionHandler:^(ACAccount *account, NSError *error) {
-                                                                if(account) {
-                                                                    [self performReverseAuthForAccount:account withBlock:completionBlock];
-                                                                }
-                                                                else {
-                                                                    completionBlock(nil, nil, error, NO);
-                                                                }
-                                                            }];
+                                                        [self saveTwitterAccountWithToken:accessToken.key andSecret:accessToken.secret andScreenName:screenName 
+                                                        withCompletionHandler:^(ACAccount *account, NSError *error) {
+                                                            if(account) {
+                                                                [self performReverseAuthForAccount:account withBlock:completionBlock];
+                                                            }
+                                                            else {
+                                                                completionBlock(nil, nil, error, NO);
+                                                            }
+                                                        }];
                                                     }
-                                                    // Native access was not granted, but auth was successful...
                                                     else {
                                                         // Convert responseObject to string and dictionary from OAuth response
                                                         NSString *responseString = [responseObject isKindOfClass:[NSData class]] ? [[NSString alloc] initWithData:responseObject encoding:NSUTF8StringEncoding] : nil;
@@ -184,7 +159,12 @@ static NSDictionary * SHParametersFromQueryString(NSString *queryString) {
     
     NSString *responseStr = [[NSString alloc] initWithData:responseData encoding:NSUTF8StringEncoding];
     
+    
     NSDictionary * response = [NSURL ab_parseURLQueryString:responseStr];
+    
+    
+    
+    
     BOOL isSuccess = error == nil ? YES : NO;
     
     SLRequest * request = [SLRequest requestForServiceType:SLServiceTypeTwitter requestMethod:SLRequestMethodGET URL:[NSURL URLWithString:@"https://api.twitter.com/1.1/account/verify_credentials.json?include_entities=false&skip_status=true"] parameters:nil];
@@ -196,9 +176,8 @@ static NSDictionary * SHParametersFromQueryString(NSString *queryString) {
       if(responseData == nil) {
         dispatch_async(dispatch_get_main_queue(), ^{
           completionBlock((id<account>)theAccount, nil, error, NO);
-        });
-        
           return;
+        });
       }
       
         NSDictionary * responseUser = nil;
@@ -245,27 +224,26 @@ static NSDictionary * SHParametersFromQueryString(NSString *queryString) {
   
 }
 
-+(void)saveTwitterAccountWithToken:(NSString *)theToken andSecret:(NSString *)theSecret
-                    withScreenName:(NSString *)theScreenName
++(void)saveTwitterAccountWithToken:(NSString *)theToken andSecret:(NSString *)theSecret andScreenName:(NSString *)screenName
              withCompletionHandler:(void (^)(ACAccount * account, NSError * error))onCompletionBlock; {
   
-    ACAccountStore * accountStore  =  [[ACAccountStore alloc] init];
-    ACAccountType  * accountType   = [accountStore accountTypeWithAccountTypeIdentifier:self.accountTypeIdentifier];
+  ACAccountStore * accountStore  =  [[ACAccountStore alloc] init];
+  ACAccountType  * accountType   = [accountStore accountTypeWithAccountTypeIdentifier:self.accountTypeIdentifier];
+  
+  ACAccountCredential * credential    = [[ACAccountCredential alloc]
+                                         initWithOAuthToken:theToken tokenSecret:theSecret];
+  
+  __block ACAccount * account = [[ACAccount alloc]
+                                 initWithAccountType:accountType];
+  account.accountType = accountType; // Apple SDK bug - accountType isn't retained.
+  
+  account.credential = credential;
     
-    ACAccountCredential * credential    = [[ACAccountCredential alloc]
-                                           initWithOAuthToken:theToken tokenSecret:theSecret];
-    
-    __block ACAccount * account = [[ACAccount alloc]
-                                   initWithAccountType:accountType];
-    account.accountType = accountType; // Apple SDK bug - accountType isn't retained.
-    
-    account.credential = credential;
-    
-    if (theScreenName) {
-        account.username = theScreenName;
+    if (screenName) {
+      account.username = screenName;
     }
     
-    BOOL overrideExistingAccount = [[SHOmniAuth optionForProviderKey:kOmniAuthTwitterUserInfoKeyOverrideExistingAccount forProvider:[[self class] provider]] boolValue];
+    BOOL overrideExistingAccount = YES;
     
     typedef void (^OriginalSaveAccountFinishedBlock)(BOOL success, NSError *error, BOOL canOverrideExistingAccount);
     typedef void (^SaveAccountFinishedBlock)(BOOL success, NSError *error, BOOL canOverrideExistingAccount, OriginalSaveAccountFinishedBlock finishedBlock);
@@ -309,50 +287,34 @@ static NSDictionary * SHParametersFromQueryString(NSString *queryString) {
                 }];
             }
             else {
-                NSArray * accounts = [accountStore accountsWithAccountType:accountType];
-                
-                [accounts enumerateObjectsUsingBlock:^(ACAccount * obj, NSUInteger idx, BOOL *stop) {
-                    
-                    if([obj.accountDescription isEqualToString: account.username]) {
-                        account = obj;
-                        *stop = YES;
-                    }
-                    else {
-                        account = nil;
-                    }
-                }];
-                
-                if (account == nil && accounts.count == 0) {
-                    error = [NSError errorWithDomain:kOmniAuthTwitterErrorDomainConflictingAccounts
-                                                code:kOmniAuthTwitterErrorCodeConflictingAccounts
-                                            userInfo:@{NSLocalizedDescriptionKey : @"Could not save account: Conflicting accounts because there is more than a single twitter account."}
-                             ];
+                // Only return an account if we're sure the account is the matching account
+                if(accounts.count == 1)
+                    account = accounts[0];
+                else if (accounts.count > 1) {
+                    error = [NSError errorWithDomain:kOmniAuthTwitterErrorDomainConflictingAccounts code:kOmniAuthTwitterErrorCodeConflictingAccounts userInfo:@{NSLocalizedDescriptionKey : @"Could not save account: Conflicting accounts because there is more than a single twitter account."}];
+                    account = nil;
+                }
+                else {
+                    account = nil;
                 }
             }
-            
+        
         }
-        else if (success == NO) {
-            account = nil;
-        }
+        
+        else if (success == NO) account = nil;
         
         if (finished) {
             dispatch_async(dispatch_get_main_queue(), ^{ onCompletionBlock(account, error); });
         }
     };
     
-    [accountStore requestAccessToAccountsWithType:accountType options:nil completion:^(BOOL granted, NSError *error) {
-        if (granted || (error.code == ACErrorAccountNotFound && [error.domain isEqualToString:ACErrorDomain])) {
-            [accountStore saveAccount:account withCompletionHandler:^(BOOL success, NSError *error) {
-                saveAccountFinishedBlock(success, error, overrideExistingAccount, ^(BOOL success, NSError *error, BOOL canOverrideExistingAccount) {
-                    saveAccountFinishedBlock(success, error, NO, NULL);
-                });
-            }];
-        }
-        else {
-            dispatch_async(dispatch_get_main_queue(), ^{ onCompletionBlock(account, error); });
-        }
+    [accountStore saveAccount:account withCompletionHandler:^(BOOL success, NSError *error) {
+        saveAccountFinishedBlock(success, error, overrideExistingAccount, ^(BOOL success, NSError *error, BOOL canOverrideExistingAccount) {
+            saveAccountFinishedBlock(success, error, NO, NULL);
+        });
     }];
 }
+
 
 +(NSString *)provider; {
   return self.description;
@@ -369,7 +331,6 @@ static NSDictionary * SHParametersFromQueryString(NSString *queryString) {
 +(NSString *)description; {
   return NSStringFromClass(self.class);
 }
-
 +(NSMutableDictionary *)authHashWithResponse:(NSDictionary *)theResponse; {
   NSString * name  = theResponse[@"name"];
   NSArray  * names = [name componentsSeparatedByString:@" "];
