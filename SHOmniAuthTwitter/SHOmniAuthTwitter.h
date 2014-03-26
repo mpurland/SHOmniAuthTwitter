@@ -14,6 +14,8 @@ static const NSInteger kOmniAuthTwitterErrorCodeConflictingAccounts = 500;
 static const NSInteger kOmniAuthTwitterErrorCodeAccessNotGranted = 403;
 
 static NSString * const kOmniAuthTwitterUserInfoKeyOverrideExistingAccount = @"SHOmniAuthTwitterUserInfoKeyOverrideExistingAccount";
+static NSString * const kOmniAuthTwitterUserInfoKeyAuthAccessType = @"SHOmniAuthTwitterUserInfoKeyAuthAccessType";
+
 
 #import "SHOmniAuthProvider.h"
 @interface SHOmniAuthTwitter : NSObject

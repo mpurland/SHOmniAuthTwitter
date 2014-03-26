@@ -120,8 +120,15 @@ static NSDictionary * SHParametersFromQueryString(NSString *queryString) {
                                      initWithBaseURL:[NSURL URLWithString:@"https://api.twitter.com/"]
                                      key:[SHOmniAuth providerValue:SHOmniAuthProviderValueKey forProvider:self.provider]
                                      secret:[SHOmniAuth providerValue:SHOmniAuthProviderValueSecret forProvider:self.provider]];
-  
-  [twitterClient authorizeUsingOAuthWithRequestTokenPath:@"oauth/request_token"
+  NSString *accessType = [SHOmniAuth optionForProviderKey:kOmniAuthTwitterUserInfoKeyAuthAccessType forProvider:[[self class] provider]];
+    
+    if (!accessType) {
+        accessType = @"write"; // Use write by default
+    }
+    
+    NSString *requestTokenPath = [NSString stringWithFormat:@"oauth/request_token?x_auth_access_type=%@", accessType];
+    
+  [twitterClient authorizeUsingOAuthWithRequestTokenPath:requestTokenPath
                                    userAuthorizationPath:@"oauth/authorize"
                                              callbackURL:[NSURL
                                                           URLWithString:[SHOmniAuth
