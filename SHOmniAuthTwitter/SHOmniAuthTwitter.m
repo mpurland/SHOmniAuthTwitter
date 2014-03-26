@@ -74,6 +74,21 @@ static NSDictionary * SHParametersFromQueryString(NSString *queryString) {
   }
 }
 
++ (TWAuthType)authType {
+    NSString *accessType = [SHOmniAuth optionForProviderKey:kOmniAuthTwitterUserInfoKeyAuthAccessType forProvider:[[self class] provider]];
+    
+    TWAuthType authType;
+    
+    if ([accessType isEqual:@"read"]) {
+        authType = TWAuthTypeRead;
+    }
+    else {
+        authType = TWAuthTypeReadWrite;
+    }
+    
+    return authType;
+}
+
 + (void)performLoginWithAccounts:(NSArray *)accounts
                      pickerBlock:(SHOmniAuthAccountsListHandler)accountPickerBlock
                  completionBlock:(SHOmniAuthAccountResponseHandler)completionBlock granted:(BOOL)granted {
@@ -247,7 +262,7 @@ static NSDictionary * SHParametersFromQueryString(NSString *queryString) {
       
     }];
     
-  }];
+  } authType:[self authType]];
   
   
 }
