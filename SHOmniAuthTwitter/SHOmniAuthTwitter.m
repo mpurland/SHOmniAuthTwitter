@@ -122,6 +122,15 @@ static NSDictionary * SHParametersFromQueryString(NSString *queryString) {
     if ([SLComposeViewController class]) available = [SLComposeViewController isAvailableForServiceType:SLServiceTypeTwitter];
 
 #endif
+    
+    id useNativeValue = [SHOmniAuth optionForProviderKey:kOmniAuthTwitterUserInfoKeyUseNative forProvider:[[self class] provider]];
+    if (useNativeValue != nil) {
+        BOOL useNative = [useNativeValue boolValue];
+        
+        if (!useNative) {
+            return NO;
+        }
+    }
 
     return available;
 }
